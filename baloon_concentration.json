@@ -1,0 +1,32 @@
+{
+  "2.0": {
+    "for_calibration": 1,
+    "name": "NN1",
+    "CO2+": 391.95,
+    "CH4+": 1.83727
+  },
+  "6.0": {
+    "for_calibration": 1,
+    "name": "NN2",
+    "CO2+": 453.39,
+    "CH4+": 2.11223
+  },
+  "3.0": {
+    "for_calibration": 0,
+    "name": "AES057",
+    "CO2+": 0,
+    "CH4+": 0
+  },
+  "8.0": {
+    "for_calibration": 0,
+    "name": "Валдай",
+    "CO2+": 0,
+    "CH4+": 0
+  },
+  "7.0": {
+    "for_calibration": 0,
+    "name": "A2_сравнения",
+    "CO2+": 0,
+    "CH4+": 0
+  }
+}
