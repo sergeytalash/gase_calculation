@@ -270,7 +270,7 @@ class Calculate:
             print(f"File has been created {filename}.")
 
     @staticmethod
-    def take_half(data):
+    def take_last(data):
         """
         Takes only a half of the table from the end
         Args:
@@ -281,7 +281,7 @@ class Calculate:
         """
         new_data = {}
         for index, array in data.items():
-            df = array[len(array) // 2:]
+            df = array[-8:]
             new_data[index] = df
         return new_data
 
@@ -451,7 +451,7 @@ class MainApp(tk.Tk):
         data = main.resample_by_1_minute(data)
         main.save_to_excel(data, filename=main.one_minute_resample_filename)
         Chart(self).show(data, mode="data2.index, data2.MPVPosition.mean", line_width=1, marker=None)
-        data = main.take_half(data)
+        data = main.take_last(data)
         # Chart(self).show(data, mode="data2.index, data2.MPVPosition.mean")
         data = main.make_mean(data)
         data = pd.concat(data.values())
