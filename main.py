@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import tkinter as tk
@@ -259,8 +260,14 @@ class Calculate:
             data2 = pd.concat(data.values())
         else:
             data2 = data
-        data2.to_excel(filename)
-        print(f"File has been created {filename}.")
+        try:
+            data2.to_excel(filename)
+        except Exception as err:
+            print(f"Error in saving to file {filename}:\n{err}\nProbably file is already in use.")
+            filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_") + filename
+            data2.to_excel(filename)
+        finally:
+            print(f"File has been created {filename}.")
 
     @staticmethod
     def take_half(data):
@@ -314,7 +321,9 @@ class Calculate:
                 cycle_i = 1
                 cycle += 1
             measure_cycles.setdefault(cycle, {}).setdefault(
-                "data", {})[str(float(line[0]))] = [line[1], line[3]]  # MVP, CH4, CO2
+                "data", {})[str(float(line[0]))] = [line[1], line[3]]  # MVP,CH4,CO2
+            measure_cycles.setdefault(cycle, {}).setdefault(
+                "std", {})[str(float(line[0]))] = [line[2], line[4]]  # MVP,CH4_std,CO2_std
             measure_cycles.setdefault(cycle, {}).setdefault(
                 "date_time", {})[str(float(line[0]))] = date_time
         measure_cycles = {i: cycle for i, cycle in measure_cycles.items() if
@@ -329,6 +338,9 @@ class Calculate:
                     gases_dict.setdefault(
                         gas, {}).setdefault(
                         "measured", []).append(cycle["data"][mvp][j])
+                    gases_dict.setdefault(
+                        gas, {}).setdefault(
+                        "std", []).append(cycle["std"][mvp][j])
                     gases_dict.setdefault(
                         gas, {}).setdefault(
                         "assigned", []).append(values[gas])
@@ -354,6 +366,9 @@ class Calculate:
                     gases_dict.setdefault(
                         balloon_name, {}).setdefault(
                         gas, {})["measured"] = measured_gas_value
+                    gases_dict.setdefault(
+                        balloon_name, {}).setdefault(
+                        gas, {})["std"] = cycle["std"][mvp][j]
                     coefficients = calibrated_gases[i][gas]['coefficients']
                     calculated_value = coefficients[0] * measured_gas_value + coefficients[1]
                     gases_dict.setdefault(
@@ -419,7 +434,7 @@ class Calculate:
     @staticmethod
     def make_table(data):
         data = pd.DataFrame(data)
-        data = data.reindex(['date_time', 'name', 'measured', 'assigned', 'calculated', 'coefficients'], axis=1)
+        data = data.reindex(['date_time', 'name', 'measured', "std", 'assigned', 'calculated', 'coefficients'], axis=1)
         data = data.sort_values(by="date_time")
         data = data.reset_index(drop=True)
         return data
@@ -464,9 +479,8 @@ class MainApp(tk.Tk):
         main.save_to_excel(co2_table, filename=main.co2_table_filename)
 
         ch4_table = main.make_table(ch4)
-        ch4_table = main.multiply_1000(ch4_table, column_name="measured")
-        ch4_table = main.multiply_1000(ch4_table, column_name="calculated")
-        ch4_table = main.multiply_1000(ch4_table, column_name="assigned")
+        for column in ["measured", "std", "calculated", "assigned"]:
+            ch4_table = main.multiply_1000(ch4_table, column_name=column)
         main.save_to_excel(ch4_table, filename=main.ch4_table_filename)
 
         print("\nCO2")
