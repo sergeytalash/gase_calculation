@@ -198,34 +198,60 @@ class Calculate:
             dict: {i: {"DATETIME": [], "MPVPosition": [], "CO2_dry": [], "CH4_dry": []},.. }
         """
         first_mvp = data["MPVPosition"].head(n=1).values[0]
-        tmp_data = data.loc[:, self.columns]
+        if "DATETIME" in data.columns:
+            mvp_line_index = 1
+            tmp_data = data.loc[:, self.columns]
+        else:
+            mvp_line_index = 0
+            tmp_data = data
         new_data = {}
         index = 0
-        for line in tmp_data.values:  # "DATETIME", "MPVPosition", "CO2_dry", "CH4_dry"
+        for data_index, line in zip(tmp_data.index, tmp_data.values):  # "DATETIME", "MPVPosition", "CO2_dry", "CH4_dry"
+            mvp = float(line[mvp_line_index])
+            line[mvp_line_index] = mvp
+            line = line.tolist()
+
+            if mvp_line_index == 0:
+                line.insert(0, data_index)
             # (*)
-            if str(line[1]) not in self.concentration.keys():
+            if mvp not in [float(k) for k in self.concentration.keys()]:
                 continue
             if line[1] != first_mvp:
                 index += 1
                 first_mvp = line[1]
-            new_data.setdefault(index, []).append(list(line))
+            new_data.setdefault(index, []).append(line)
         return new_data
 
-    def make_dataframe_dict(self, data):
+    def make_dataframe_dict(self, data, part=1):
         """
         Replaces dict of lists with pd.DataFrame
         Args:
+            part (int): Part of calculations
             data (dict): Data with dict of lists
 
         Returns:
             dict: {i: pd.DataFrame,.. }
         """
         dataframe_dict = {}
+        if part == 1:
+            columns = self.columns
+        elif part == 2:
+            columns = pd.MultiIndex.from_tuples(
+                [('DATETIME', 'mean'),
+                 ('MPVPosition', 'mean'),
+                 ('CH4_dry', 'mean'),
+                 ('CH4_dry', 'std'),
+                 ('CO2_dry', 'mean'),
+                 ('CO2_dry', 'std')],
+                )
+        else:
+            columns = []
 
         for index, tmp_data in data.items():
-            df = pd.DataFrame(data=tmp_data, columns=self.columns)
+            df = pd.DataFrame(data=tmp_data, columns=columns)
             df.set_index(self.columns[0])
             dataframe_dict[index] = df
+
         return dataframe_dict
 
     def resample_by_1_minute(self, data):
@@ -255,7 +281,8 @@ class Calculate:
                     #       )
         return new_data
 
-    def save_to_excel(self, data, filename):
+    @staticmethod
+    def save_to_excel(data, filename):
         if isinstance(data, dict):
             data2 = pd.concat(data.values())
         else:
@@ -270,6 +297,25 @@ class Calculate:
             print(f"File has been created {filename}.")
 
     @staticmethod
+    def read_from_excel(filename="table_by_1_minute.xlsx"):
+        """
+        Asks user to update excel file and then reads it
+        Args:
+            filename (str): Part of the file name
+
+        Returns:
+            pd.DataFrame: or None
+        """
+        for file in os.listdir():
+            if filename in file:
+                try:
+                    input(f"Вы можете редактировать промежуточный файл '{file}'\n"
+                          f"Сохраните его и нажмите Enter чтобы продолжить...")
+                    return pd.read_excel(file, header=[0, 1], index_col=0)
+                except Exception as err:
+                    print(err)
+
+    @staticmethod
     def take_last(data):
         """
         Takes only a half of the table from the end
@@ -282,6 +328,7 @@ class Calculate:
         new_data = {}
         for index, array in data.items():
             df = array[-8:]
+            df.reset_index(inplace=True)
             new_data[index] = df
         return new_data
 
@@ -297,15 +344,16 @@ class Calculate:
         """
         new_data = {}
         for index, array in data.items():
-            new_data[index] = array.mean()
-            new_data[index]["datetime"] = array.index[0]
+            tmp_array = array.iloc[:, 2:]
+            new_data[index] = tmp_array.mean()
+            new_data[index]["datetime"] = array["DATETIME"]["mean"][0]
         return new_data
 
     def calc_coefficients(self, data):
         """
         Calculates polynomial coefficients for calibration gases
         Args:
-            data ():
+            data (pd.DataFrame):
 
         Returns:
 
@@ -445,26 +493,34 @@ class MainApp(tk.Tk):
         tk.Tk.__init__(self)
 
         main = Calculate()
-        data = main.get_data()
-        data = main.group_by_mvp_position(data)
-        data = main.make_dataframe_dict(data)
-        data = main.resample_by_1_minute(data)
-        main.save_to_excel(data, filename=main.one_minute_resample_filename)
-        Chart(self).show(data, mode="data2.index, data2.MPVPosition.mean", line_width=1, marker=None)
-        data = main.take_last(data)
-        # Chart(self).show(data, mode="data2.index, data2.MPVPosition.mean")
-        data = main.make_mean(data)
-        data = pd.concat(data.values())
+        # TODO: Allow working with 3 calibration gases
+        df = main.get_data()
+        data_dict = main.group_by_mvp_position(df)
+        data_dict = main.make_dataframe_dict(data_dict, part=1)
+        data_dict = main.resample_by_1_minute(data_dict)
 
-        data = pd.DataFrame(dict(MPVPosition=data.MPVPosition["mean"].values,
-                                 CH4_dry=data.CH4_dry["mean"].values,
-                                 CH4_dry_std=data.CH4_dry["std"].values,
-                                 CO2_dry=data.CO2_dry["mean"].values,
-                                 CO2_dry_std=data.CO2_dry["std"].values),
-                            index=data.datetime.values).sort_index()
-        # print(data)
+        main.save_to_excel(data_dict, filename=main.one_minute_resample_filename)
+        Chart(self).show(data_dict, mode="data2.index, data2.MPVPosition.mean", line_width=1, marker=None)
+
+        df = main.read_from_excel()
+
+        data_dict = main.group_by_mvp_position(df)
+        data_dict = main.make_dataframe_dict(data_dict, part=2)
+        data_dict = main.take_last(data_dict)
+        # print(data_dict)
+        # Chart(self).show(data, mode="data2.index, data2.MPVPosition.mean")
+        data_dict = main.make_mean(data_dict)
+        df = pd.concat(data_dict.values())
+
+        df = pd.DataFrame(dict(MPVPosition=df.MPVPosition["mean"].values,
+                               CH4_dry=df.CH4_dry["mean"].values,
+                               CH4_dry_std=df.CH4_dry["std"].values,
+                               CO2_dry=df.CO2_dry["mean"].values,
+                               CO2_dry_std=df.CO2_dry["std"].values),
+                          index=df.datetime.values).sort_index()
+        # print(df)
         # Chart(self).show(data, mode="data.index, data.MPVPosition")
-        calibrated_data, gases = main.calc_coefficients(data)
+        calibrated_data, gases = main.calc_coefficients(df)
         # Chart(self).show(calibrated_data, mode="calibrated_data")
 
         recalculated_calibrated_gases = main.self_check(calibrated_data)
