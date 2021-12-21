@@ -309,9 +309,18 @@ class Calculate:
         for file in os.listdir():
             if filename in file:
                 try:
-                    input(f"Вы можете редактировать промежуточный файл '{file}'\n"
-                          f"Сохраните его и нажмите Enter чтобы продолжить...")
-                    return pd.read_excel(file, header=[0, 1], index_col=0)
+                    data = pd.read_excel(file, header=[0, 1], index_col=0)
+                    multi_index1 = data.columns
+                    multi_index2 = data.columns[0]
+                    while len(multi_index1) != len(multi_index2):
+                        input(f"Вы можете изменить промежуточный файл '{file}'\n"
+                              f"Сохраните его и нажмите Enter чтобы продолжить...")
+                        data = pd.read_excel(file, header=[0, 1], index_col=0)
+                        multi_index2 = data.columns
+                        if len(multi_index1) != len(multi_index2):
+                            print(f"\nОшибка! В файле изменилось количество столбцов с данными. "
+                                  f"Должно быть ({len(multi_index1) + 1})")
+                    return data
                 except Exception as err:
                     print(err)
 
@@ -451,7 +460,7 @@ class Calculate:
                                    if v["for_calibration"]]
         for cycle in data:
             for name, gases_n1_n2 in cycle.items():
-                gases = [{}, {}]
+                gases = [{}] * len(calibration_gases_names)
                 for item, array in gases_n1_n2.items():
                     for i, d in enumerate(array):
                         gases[i]["name"] = calibration_gases_names[i]
