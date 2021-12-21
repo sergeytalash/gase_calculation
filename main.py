@@ -460,7 +460,7 @@ class Calculate:
                                    if v["for_calibration"]]
         for cycle in data:
             for name, gases_n1_n2 in cycle.items():
-                gases = [{}] * len(calibration_gases_names)
+                gases = [{} for _, _ in enumerate(calibration_gases_names)]
                 for item, array in gases_n1_n2.items():
                     for i, d in enumerate(array):
                         gases[i]["name"] = calibration_gases_names[i]
