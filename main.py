@@ -1,11 +1,13 @@
 import datetime
 import json
 import os
+import sys
 import tkinter as tk
 from datetime import timedelta
 
 import matplotlib
 import numpy as np
+import openpyxl
 import pandas as pd
 
 matplotlib.use("TkAgg")
@@ -119,16 +121,17 @@ class Chart(tk.Frame):
 
 class Calculate:
     def __init__(self):
-        self.baloon_concentration_file = "baloon_concentration.json"
-        self.concentration = self.open_concentration()
+        self.baloon_concentration_file = "baloon_concentration.xlsx"
+        self.concentration = self.open_concentration_xlsx()
         self.data_folder = "data"
         self.columns = ("DATETIME", "MPVPosition", "CO2_dry", "CH4_dry")
         self.CO2_std_limit = 0.02
         self.CH4_std_limit = 0.0002
-        self.round_calculated_values = {"CH4+": 5, "CO2+": 2}
         self.one_minute_resample_filename = "table_by_1_minute.xlsx"
         self.ch4_table_filename = "table_ch4.xlsx"
         self.co2_table_filename = "table_co2.xlsx"
+        if len(sys.argv) > 1:
+            self.filter_by_std = False
 
     def open_concentration(self):
         """
@@ -138,6 +141,25 @@ class Calculate:
         """
         with open(self.baloon_concentration_file, encoding="utf8") as fr:
             return json.load(fr)
+
+    def open_concentration_xlsx(self):
+        """
+        Reads concentration json file
+        Returns:
+            dict: Concentration data
+        """
+        concentration_dict = {}
+        wb = openpyxl.load_workbook(self.baloon_concentration_file)
+        ws = wb.active
+        data = ws.iter_rows(values_only=True)
+        next(data)
+        for d in data:
+            concentration_dict[str(d[0])] = {
+                "name": str(d[1]),
+                "CO2+": float(d[2]),
+                "CH4+": float(d[3]),
+                "for_calibration": int(d[4])}
+        return concentration_dict
 
     @staticmethod
     def open_data_file(file_name):
@@ -263,22 +285,26 @@ class Calculate:
         Returns:
             dict: Data with dict of pd.DataFrame
         """
+        if not self.filter_by_std:
+            print("Ежеминутные данные. Корректировка по стандартному отклонению.")
         new_data = {}
         for index, array in data.items():
-            if array.size > 10:
-
+            if array.size > 5:
                 df = array.resample(timedelta(minutes=1), on='DATETIME').agg(
                     {'MPVPosition': 'mean',
                      'CH4_dry': ['mean', 'std'],
                      'CO2_dry': ['mean', 'std'],
                      })
-                if (df.index[df.CH4_dry['std'] < self.CH4_std_limit].size > 2 and
-                    df.index[df.CO2_dry['std'] < self.CO2_std_limit].size > 2):
-                    new_data[index] = df
-                    # print(f"Size: {len(df.index)} -> "
-                    #       f"CH4_dry: {len(df.index[df.CH4_dry['std'] < self.CH4_std_limit])} "
-                    #       f"CO2_dry: {len(df.index[df.CO2_dry['std'] < self.CO2_std_limit])}"
-                    #       )
+                if self.filter_by_std:
+                    if not (df.index[df.CH4_dry['std'] < self.CH4_std_limit].size > 2 and
+                            df.index[df.CO2_dry['std'] < self.CO2_std_limit].size > 2):
+                        continue
+                new_data[index] = df
+
+                print(f"Всего строк: {len(df.index)} -> "
+                      f"Корректных строк для CH4_dry: {len(df.index[df.CH4_dry['std'] < self.CH4_std_limit])}   "
+                      f"Корректных строк для CO2_dry: {len(df.index[df.CO2_dry['std'] < self.CO2_std_limit])}"
+                      )
         return new_data
 
     @staticmethod
