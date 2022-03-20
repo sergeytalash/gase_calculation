@@ -287,7 +287,7 @@ class Calculate:
         Returns:
             dict: Data with dict of pd.DataFrame
         """
-        if not self.filter_by_std:
+        if self.filter_by_std:
             print("Ежеминутные данные. Корректировка по стандартному отклонению.")
         new_data = {}
         for index, array in data.items():
