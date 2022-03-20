@@ -132,6 +132,8 @@ class Calculate:
         self.co2_table_filename = "table_co2.xlsx"
         if len(sys.argv) > 1:
             self.filter_by_std = False
+        else:
+            self.filter_by_std = True
 
     def open_concentration(self):
         """
@@ -265,7 +267,7 @@ class Calculate:
                  ('CH4_dry', 'std'),
                  ('CO2_dry', 'mean'),
                  ('CO2_dry', 'std')],
-                )
+            )
         else:
             columns = []
 
