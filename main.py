@@ -1,5 +1,3 @@
-import datetime
-import json
 import os
 import sys
 import tkinter as tk
@@ -17,6 +15,12 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 pd.set_option("display.max_rows", None,
               "display.max_columns", None,
               "display.width", 140)
+
+data_folder = "data"
+balloon_concentration_file = os.path.join(data_folder, "balloon_concentration.xlsx")
+one_minute_resample_filename = os.path.join(data_folder, "_table_by_1_minute.xlsx")
+ch4_table_filename = os.path.join(data_folder, "_table_ch4.xlsx")
+co2_table_filename = os.path.join(data_folder, "_table_co2.xlsx")
 
 
 class Chart(tk.Frame):
@@ -51,6 +55,7 @@ class Chart(tk.Frame):
             y (iter): Data values array
             ax (str): Target ax to plot on
             line_width (int): Width of the line
+            marker (str, optional): Marker type
 
         Returns:
             None
@@ -70,8 +75,7 @@ class Chart(tk.Frame):
                             color=color.get(ax, color["1"]),
                             marker=marker,
                             linewidth=line_width,
-                            alpha=1,
-                            )
+                            alpha=1)
 
     def clear(self):
         for item in self.canvas.get_tk_widget().find_all():
@@ -85,7 +89,6 @@ class Chart(tk.Frame):
             legend = ["MPVPosition", "CH4_dry", "CO2_dry"]
         elif mode == "data2.index, data2.MPVPosition.mean":
             data2 = pd.concat(data.values())
-            # self.set_plot(data2.index, data2.MPVPosition["mean"], ax="1", line_width=line_width)
             self.set_plot(data2.index, data2.CH4_dry["mean"], ax="1", line_width=line_width, marker=marker)
             self.set_plot(data2.index, data2.CO2_dry["mean"], ax="2", line_width=line_width, marker=marker)
             legend = ["CH4_dry", "CO2_dry"]
@@ -120,29 +123,12 @@ class Chart(tk.Frame):
 
 
 class Calculate:
-    def __init__(self):
-        self.baloon_concentration_file = "baloon_concentration.xlsx"
+    def __init__(self, std):
+        self.filter_by_std = std
         self.concentration = self.open_concentration_xlsx()
-        self.data_folder = "data"
         self.columns = ("DATETIME", "MPVPosition", "CO2_dry", "CH4_dry")
         self.CO2_std_limit = 0.02
         self.CH4_std_limit = 0.0002
-        self.one_minute_resample_filename = "table_by_1_minute.xlsx"
-        self.ch4_table_filename = "table_ch4.xlsx"
-        self.co2_table_filename = "table_co2.xlsx"
-        if len(sys.argv) > 1:
-            self.filter_by_std = False
-        else:
-            self.filter_by_std = True
-
-    def open_concentration(self):
-        """
-        Reads concentration json file
-        Returns:
-            dict: Concentration data
-        """
-        with open(self.baloon_concentration_file, encoding="utf8") as fr:
-            return json.load(fr)
 
     def open_concentration_xlsx(self):
         """
@@ -151,7 +137,7 @@ class Calculate:
             dict: Concentration data
         """
         concentration_dict = {}
-        wb = openpyxl.load_workbook(self.baloon_concentration_file)
+        wb = openpyxl.load_workbook(balloon_concentration_file)
         ws = wb.active
         data = ws.iter_rows(values_only=True)
         next(data)
@@ -178,8 +164,10 @@ class Calculate:
 
     def open_all_data_files(self):
         dfs = []
-        for file in os.listdir(self.data_folder):
-            dfs.append(self.open_data_file(os.path.join(self.data_folder, file)))
+        for file in os.listdir(data_folder):
+            if ".xls" in file:
+                continue
+            dfs.append(self.open_data_file(os.path.join(data_folder, file)))
         return pd.concat(dfs)
 
     def get_data(self):
@@ -211,38 +199,38 @@ class Calculate:
         data[column_name] = data[column_name] * 1000
         return data
 
-    def group_by_mvp_position(self, data):
+    def group_by_mpv_position(self, data):
         """
-        Groups data by mvp position.
-        (*) Removes data with MVPposition which is different from defined in concentration file
+        Groups data by mpv position.
+        (*) Removes data with mpv position which is different from defined in concentration file
         Args:
             data (pd.DataFrame): Data table
 
         Returns:
             dict: {i: {"DATETIME": [], "MPVPosition": [], "CO2_dry": [], "CH4_dry": []},.. }
         """
-        first_mvp = data["MPVPosition"].head(n=1).values[0]
+        first_mpv = data["MPVPosition"].head(n=1).values[0]
         if "DATETIME" in data.columns:
-            mvp_line_index = 1
+            mpv_line_index = 1
             tmp_data = data.loc[:, self.columns]
         else:
-            mvp_line_index = 0
+            mpv_line_index = 0
             tmp_data = data
         new_data = {}
         index = 0
         for data_index, line in zip(tmp_data.index, tmp_data.values):  # "DATETIME", "MPVPosition", "CO2_dry", "CH4_dry"
-            mvp = float(line[mvp_line_index])
-            line[mvp_line_index] = mvp
+            mpv = float(line[mpv_line_index])
+            line[mpv_line_index] = mpv
             line = line.tolist()
 
-            if mvp_line_index == 0:
+            if mpv_line_index == 0:
                 line.insert(0, data_index)
             # (*)
-            if mvp not in [float(k) for k in self.concentration.keys()]:
+            if mpv not in [float(k) for k in self.concentration.keys()]:
                 continue
-            if line[1] != first_mvp:
+            if line[1] != first_mpv:
                 index += 1
-                first_mvp = line[1]
+                first_mpv = line[1]
             new_data.setdefault(index, []).append(line)
         return new_data
 
@@ -288,7 +276,11 @@ class Calculate:
             dict: Data with dict of pd.DataFrame
         """
         if self.filter_by_std:
-            print("Ежеминутные данные. Корректировка по стандартному отклонению.")
+            print(f"Корректировка по стандартному отклонению - Включена.\n"
+                  f"CH4 STD: {self.CO2_std_limit}\n"
+                  f"CO2 STD: {self.CH4_std_limit}")
+        else:
+            print("Корректировка по стандартному отклонению - Отключена.")
         new_data = {}
         for index, array in data.items():
             if array.size > 5:
@@ -298,34 +290,31 @@ class Calculate:
                      'CO2_dry': ['mean', 'std'],
                      })
                 if self.filter_by_std:
-                    if not (df.index[df.CH4_dry['std'] < self.CH4_std_limit].size > 2 and
-                            df.index[df.CO2_dry['std'] < self.CO2_std_limit].size > 2):
+                    if not (df.index[df.CH4_dry['std'] < self.CH4_std_limit].size > 0 and
+                            df.index[df.CO2_dry['std'] < self.CO2_std_limit].size > 0):
                         continue
                 new_data[index] = df
-
-                print(f"Всего строк: {len(df.index)} -> "
+                print(f"MPV: '{df['MPVPosition']['mean'][0]}' Всего строк: {len(df.index)} -> "
                       f"Корректных строк для CH4_dry: {len(df.index[df.CH4_dry['std'] < self.CH4_std_limit])}   "
                       f"Корректных строк для CO2_dry: {len(df.index[df.CO2_dry['std'] < self.CO2_std_limit])}"
                       )
         return new_data
 
-    @staticmethod
-    def save_to_excel(data, filename):
+    def save_to_excel(self, data, filename):
         if isinstance(data, dict):
             data2 = pd.concat(data.values())
         else:
             data2 = data
         try:
             data2.to_excel(filename)
+            print(f"Файл создан '{filename}'.")
         except Exception as err:
-            print(f"Error in saving to file {filename}:\n{err}\nProbably file is already in use.")
-            filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_") + filename
-            data2.to_excel(filename)
-        finally:
-            print(f"File has been created {filename}.")
+            input(f"\n[Ошибка] Невозможно сохранить файл '{filename}':\n{err}\n"
+                  f"Закройте файл, если он открыт. Чтобы продолжить, нажмите Enter...")
+            self.save_to_excel(data, filename)
 
     @staticmethod
-    def read_from_excel(filename="table_by_1_minute.xlsx"):
+    def read_from_excel(filename=one_minute_resample_filename):
         """
         Asks user to update excel file and then reads it
         Args:
@@ -334,23 +323,21 @@ class Calculate:
         Returns:
             pd.DataFrame: or None
         """
-        for file in os.listdir():
-            if filename in file:
-                try:
-                    data = pd.read_excel(file, header=[0, 1], index_col=0)
-                    multi_index1 = data.columns
-                    multi_index2 = data.columns[0]
-                    while len(multi_index1) != len(multi_index2):
-                        input(f"Вы можете изменить промежуточный файл '{file}'\n"
-                              f"Сохраните его и нажмите Enter чтобы продолжить...")
-                        data = pd.read_excel(file, header=[0, 1], index_col=0)
-                        multi_index2 = data.columns
-                        if len(multi_index1) != len(multi_index2):
-                            print(f"\nОшибка! В файле изменилось количество столбцов с данными. "
-                                  f"Должно быть ({len(multi_index1) + 1})")
-                    return data
-                except Exception as err:
-                    print(err)
+        try:
+            data = pd.read_excel(filename, header=[0, 1], index_col=0)
+            multi_index1 = data.columns
+            multi_index2 = data.columns[0]
+            while len(multi_index1) != len(multi_index2):
+                input(f"Вы можете изменить промежуточный файл '{filename}'\n"
+                      f"Сохраните его и нажмите Enter, чтобы продолжить...")
+                data = pd.read_excel(filename, header=[0, 1], index_col=0)
+                multi_index2 = data.columns
+                if len(multi_index1) != len(multi_index2):
+                    print(f"\n[Ошибка] В файле изменилось количество столбцов с данными. "
+                          f"Должно быть ({len(multi_index1) + 1})")
+            return data
+        except Exception as err:
+            print(err)
 
     @staticmethod
     def take_last(data):
@@ -406,70 +393,76 @@ class Calculate:
                 cycle_i = 1
                 cycle += 1
             measure_cycles.setdefault(cycle, {}).setdefault(
-                "data", {})[str(float(line[0]))] = [line[1], line[3]]  # MVP,CH4,CO2
+                "data", {})[str(float(line[0]))] = [line[1], line[3]]  # mpv,CH4,CO2
             measure_cycles.setdefault(cycle, {}).setdefault(
-                "std", {})[str(float(line[0]))] = [line[2], line[4]]  # MVP,CH4_std,CO2_std
+                "std", {})[str(float(line[0]))] = [line[2], line[4]]  # mpv,CH4_std,CO2_std
             measure_cycles.setdefault(cycle, {}).setdefault(
                 "date_time", {})[str(float(line[0]))] = date_time
-        measure_cycles = {i: cycle for i, cycle in measure_cycles.items() if
-                          len(cycle["data"]) == len(self.concentration)}
-        mvp_for_calibration = {k: v for k, v in self.concentration.items() if v["for_calibration"]}
+
+        mpv_for_calibration = {k: v for k, v in self.concentration.items() if v["for_calibration"]}
 
         calibrated_gases = []
         for i, cycle in measure_cycles.items():
             gases_dict = {}
-            for mvp, values in mvp_for_calibration.items():
-                for j, gas in enumerate(["CH4+", "CO2+"]):
-                    gases_dict.setdefault(
-                        gas, {}).setdefault(
-                        "measured", []).append(cycle["data"][mvp][j])
-                    gases_dict.setdefault(
-                        gas, {}).setdefault(
-                        "std", []).append(cycle["std"][mvp][j])
-                    gases_dict.setdefault(
-                        gas, {}).setdefault(
-                        "assigned", []).append(values[gas])
-                    gases_dict.setdefault(
-                        gas, {}).setdefault(
-                        "date_time", []).append(cycle["date_time"][mvp])
-            # concentration CO2(measured CO2)
-            # concentration CH4(measured CH4)
-            ch4_coeffs = np.polyfit(gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"], deg=1)
-            co2_coeffs = np.polyfit(gases_dict["CO2+"]["measured"], gases_dict["CO2+"]["assigned"], deg=1)
-            gases_dict["CH4+"]["coefficients"] = list(ch4_coeffs)
-            gases_dict["CO2+"]["coefficients"] = list(co2_coeffs)
-            calibrated_gases.append(gases_dict)
-        mvp_not_for_calibration = {k: v for k, v in self.concentration.items() if not v["for_calibration"]}
+            try:
+                for mpv, values in mpv_for_calibration.items():
+                    for j, gas in enumerate(["CH4+", "CO2+"]):
+                        gases_dict.setdefault(gas, {}).setdefault(
+                            "measured", []).append(cycle["data"][mpv][j])
+                        gases_dict.setdefault(gas, {}).setdefault(
+                            "std", []).append(cycle["std"][mpv][j])
+                        gases_dict.setdefault(gas, {}).setdefault(
+                            "assigned", []).append(values[gas])
+                        gases_dict.setdefault(gas, {}).setdefault(
+                            "date_time", []).append(cycle["date_time"][mpv])
+                        gases_dict.setdefault(gas, {}).setdefault(
+                            "MPV", []).append(str(mpv))
+                # concentration CO2(measured CO2)
+                # concentration CH4(measured CH4)
+                ch4_coeffs = np.polyfit(gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"], deg=1)
+                co2_coeffs = np.polyfit(gases_dict["CO2+"]["measured"], gases_dict["CO2+"]["assigned"], deg=1)
+                gases_dict["CH4+"]["coefficients"] = list(ch4_coeffs)
+                gases_dict["CO2+"]["coefficients"] = list(co2_coeffs)
+                calibrated_gases.append(gases_dict)
+            except KeyError as err:
+                print(f"\nДля калибровочного газа MPV {err} в цикле №'{i}' измерений не найдено!")
+                if calibrated_gases:
+                    calibrated_gases.append(calibrated_gases[0])
+                    print(f"Будут использованы коэффициенты из предыдущего цикла!\n")
+            except Exception as err:
+                raise err
+        if not calibrated_gases:
+            print("Измерений с калибровочными газами не найдено!\n"
+                  "(Проверьте соответствие данных с файлом концентраций.)")
+            exit(1)
+
+        mpv_not_for_calibration = {k: v for k, v in self.concentration.items() if not v["for_calibration"]}
 
         gases = []
         for i, cycle in measure_cycles.items():
             gases_dict = {}
-            for mvp, values in mvp_not_for_calibration.items():
+            for mpv, values in mpv_not_for_calibration.items():
                 balloon_name = values["name"]
                 for j, gas in enumerate(["CH4+", "CO2+"]):
-                    measured_gas_value = cycle["data"][mvp][j]
-                    gases_dict.setdefault(
-                        balloon_name, {}).setdefault(
+                    measured_gas_value = cycle["data"].get(mpv, [0, 0])[j]
+                    gases_dict.setdefault(balloon_name, {}).setdefault(
                         gas, {})["measured"] = measured_gas_value
-                    gases_dict.setdefault(
-                        balloon_name, {}).setdefault(
-                        gas, {})["std"] = cycle["std"][mvp][j]
+                    gases_dict.setdefault(balloon_name, {}).setdefault(
+                        gas, {})["std"] = cycle["std"].get(mpv, [0, 0])[j]
                     coefficients = calibrated_gases[i][gas]['coefficients']
                     calculated_value = coefficients[0] * measured_gas_value + coefficients[1]
-                    gases_dict.setdefault(
-                        balloon_name, {}).setdefault(
+                    gases_dict.setdefault(balloon_name, {}).setdefault(
                         gas, {})["calculated"] = calculated_value
-                    gases_dict.setdefault(
-                        balloon_name, {}).setdefault(
-                        gas, {})["date_time"] = cycle["date_time"][mvp]
+                    gases_dict.setdefault(balloon_name, {}).setdefault(
+                        gas, {})["date_time"] = cycle["date_time"].get(mpv)
+                    gases_dict.setdefault(balloon_name, {}).setdefault(
+                        gas, {})["MPV"] = str(mpv)
             gases.append(gases_dict)
 
         return calibrated_gases, gases
 
     @staticmethod
     def self_check(cd):
-        # coeffs = {"CH4+": cd[0]['CH4+']['coefficients'],
-        #           "CO2+": cd[0]['CO2+']['coefficients']}
         for i, cycle in enumerate(cd):
             coeffs = {"CH4+": cd[i]['CH4+']['coefficients'],
                       "CO2+": cd[i]['CO2+']['coefficients']}
@@ -493,13 +486,10 @@ class Calculate:
                     for i, d in enumerate(array):
                         gases[i]["name"] = calibration_gases_names[i]
                         gases[i][item] = d
-
                 if name == 'CH4+':
                     ch4_list.extend(gases)
-
                 if name == 'CO2+':
                     co2_list.extend(gases)
-
         return co2_list, ch4_list
 
     @staticmethod
@@ -519,29 +509,30 @@ class Calculate:
     @staticmethod
     def make_table(data):
         data = pd.DataFrame(data)
-        data = data.reindex(['date_time', 'name', 'measured', "std", 'assigned', 'calculated', 'coefficients'], axis=1)
+        data = data.reindex(['date_time', 'name', 'MPV', 'measured', "std", 'assigned', 'calculated', 'coefficients'],
+                            axis=1)
         data = data.sort_values(by="date_time")
         data = data.reset_index(drop=True)
         return data
 
 
 class MainApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, std=True):
         tk.Tk.__init__(self)
 
-        main = Calculate()
+        main = Calculate(std)
         # TODO: Allow working with 3 calibration gases
         df = main.get_data()
-        data_dict = main.group_by_mvp_position(df)
+        data_dict = main.group_by_mpv_position(df)
         data_dict = main.make_dataframe_dict(data_dict, part=1)
         data_dict = main.resample_by_1_minute(data_dict)
 
-        main.save_to_excel(data_dict, filename=main.one_minute_resample_filename)
+        main.save_to_excel(data_dict, filename=one_minute_resample_filename)
         Chart(self).show(data_dict, mode="data2.index, data2.MPVPosition.mean", line_width=1, marker=None)
 
         df = main.read_from_excel()
 
-        data_dict = main.group_by_mvp_position(df)
+        data_dict = main.group_by_mpv_position(df)
         data_dict = main.make_dataframe_dict(data_dict, part=2)
         data_dict = main.take_last(data_dict)
         # print(data_dict)
@@ -557,6 +548,7 @@ class MainApp(tk.Tk):
                           index=df.datetime.values).sort_index()
         # print(df)
         # Chart(self).show(data, mode="data.index, data.MPVPosition")
+
         calibrated_data, gases = main.calc_coefficients(df)
         # Chart(self).show(calibrated_data, mode="calibrated_data")
 
@@ -568,13 +560,12 @@ class MainApp(tk.Tk):
         ch4 = ch4_1 + ch4_2
 
         co2_table = main.make_table(co2)
-        co2_table = co2_table
-        main.save_to_excel(co2_table, filename=main.co2_table_filename)
+        main.save_to_excel(co2_table, filename=co2_table_filename)
 
         ch4_table = main.make_table(ch4)
         for column in ["measured", "std", "calculated", "assigned"]:
             ch4_table = main.multiply_1000(ch4_table, column_name=column)
-        main.save_to_excel(ch4_table, filename=main.ch4_table_filename)
+        main.save_to_excel(ch4_table, filename=ch4_table_filename)
 
         print("\nCO2")
         print(co2_table)
@@ -585,6 +576,10 @@ class MainApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    app = MainApp()
+    if len(sys.argv) > 1:
+        std = False
+    else:
+        std = True
+    app = MainApp(std=std)
     app.mainloop()
-    input("\nPress Enter to exit...")
+    input("\nДля выхода нажмите Enter...")
