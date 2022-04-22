@@ -1,11 +1,14 @@
 import os
 import sys
 import tkinter as tk
+import warnings
 from datetime import timedelta
 
 import matplotlib
 import numpy as np
 import openpyxl
+
+warnings.simplefilter(action='ignore', category=UserWarning)
 import pandas as pd
 
 matplotlib.use("TkAgg")
@@ -290,14 +293,15 @@ class Calculate:
                      'CO2_dry': ['mean', 'std'],
                      })
                 if self.filter_by_std:
-                    if not (df.index[df.CH4_dry['std'] < self.CH4_std_limit].size > 0 and
-                            df.index[df.CO2_dry['std'] < self.CO2_std_limit].size > 0):
+                    std_data = df[df.CH4_dry['std'] < self.CH4_std_limit][df.CO2_dry['std'] < self.CO2_std_limit]
+                    print(f"MPV: '{df['MPVPosition']['mean'][0]}' Всего строк: {len(df)} -> "
+                          f"Минимум корректных строк для CH4_dry и CO2_dry: {len(std_data)}")
+                    if std_data.size == 0:
                         continue
-                new_data[index] = df
-                print(f"MPV: '{df['MPVPosition']['mean'][0]}' Всего строк: {len(df.index)} -> "
-                      f"Корректных строк для CH4_dry: {len(df.index[df.CH4_dry['std'] < self.CH4_std_limit])}   "
-                      f"Корректных строк для CO2_dry: {len(df.index[df.CO2_dry['std'] < self.CO2_std_limit])}"
-                      )
+                    new_data[index] = std_data
+                else:
+                    print(f"MPV: '{df['MPVPosition']['mean'][0]}' Всего строк: {len(df)}")
+                    new_data[index] = df
         return new_data
 
     def save_to_excel(self, data, filename):
@@ -371,6 +375,7 @@ class Calculate:
             tmp_array = array.iloc[:, 2:]
             new_data[index] = tmp_array.mean()
             new_data[index]["datetime"] = array["DATETIME"]["mean"][0]
+            new_data[index]["count_mean"] = len(tmp_array)
         return new_data
 
     def calc_coefficients(self, data):
@@ -397,6 +402,8 @@ class Calculate:
             measure_cycles.setdefault(cycle, {}).setdefault(
                 "std", {})[str(float(line[0]))] = [line[2], line[4]]  # mpv,CH4_std,CO2_std
             measure_cycles.setdefault(cycle, {}).setdefault(
+                "count_mean", {})[str(float(line[0]))] = line[5]  # mpv,count_mean
+            measure_cycles.setdefault(cycle, {}).setdefault(
                 "date_time", {})[str(float(line[0]))] = date_time
 
         mpv_for_calibration = {k: v for k, v in self.concentration.items() if v["for_calibration"]}
@@ -417,6 +424,8 @@ class Calculate:
                             "date_time", []).append(cycle["date_time"][mpv])
                         gases_dict.setdefault(gas, {}).setdefault(
                             "MPV", []).append(str(mpv))
+                        gases_dict.setdefault(gas, {}).setdefault(
+                            "count_mean", []).append(cycle["count_mean"][mpv])
                 # concentration CO2(measured CO2)
                 # concentration CH4(measured CH4)
                 ch4_coeffs = np.polyfit(gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"], deg=1)
@@ -457,6 +466,8 @@ class Calculate:
                         gas, {})["date_time"] = cycle["date_time"].get(mpv)
                     gases_dict.setdefault(balloon_name, {}).setdefault(
                         gas, {})["MPV"] = str(mpv)
+                    gases_dict.setdefault(balloon_name, {}).setdefault(
+                        gas, {})["count_mean"] = cycle["count_mean"].get(mpv)
             gases.append(gases_dict)
 
         return calibrated_gases, gases
@@ -509,7 +520,8 @@ class Calculate:
     @staticmethod
     def make_table(data):
         data = pd.DataFrame(data)
-        data = data.reindex(['date_time', 'name', 'MPV', 'measured', "std", 'assigned', 'calculated', 'coefficients'],
+        data = data.reindex(['date_time', 'name', 'MPV', 'measured', 'std',
+                             'assigned', 'calculated', 'count_mean', 'coefficients'],
                             axis=1)
         data = data.sort_values(by="date_time")
         data = data.reset_index(drop=True)
@@ -535,7 +547,6 @@ class MainApp(tk.Tk):
         data_dict = main.group_by_mpv_position(df)
         data_dict = main.make_dataframe_dict(data_dict, part=2)
         data_dict = main.take_last(data_dict)
-        # print(data_dict)
         # Chart(self).show(data, mode="data2.index, data2.MPVPosition.mean")
         data_dict = main.make_mean(data_dict)
         df = pd.concat(data_dict.values())
@@ -544,9 +555,9 @@ class MainApp(tk.Tk):
                                CH4_dry=df.CH4_dry["mean"].values,
                                CH4_dry_std=df.CH4_dry["std"].values,
                                CO2_dry=df.CO2_dry["mean"].values,
-                               CO2_dry_std=df.CO2_dry["std"].values),
+                               CO2_dry_std=df.CO2_dry["std"].values,
+                               Count_Mean=df.count_mean.values),
                           index=df.datetime.values).sort_index()
-        # print(df)
         # Chart(self).show(data, mode="data.index, data.MPVPosition")
 
         calibrated_data, gases = main.calc_coefficients(df)
