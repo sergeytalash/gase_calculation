@@ -126,9 +126,11 @@ class Chart(tk.Frame):
 
 
 class Calculate:
-    def __init__(self, std):
+    def __init__(self, std, no_flask):
         self.filter_by_std = std
+        self.no_flask = no_flask
         self.concentration = self.open_concentration_xlsx()
+        self.mpv_to_take_3 = [k for k, v in self.concentration.items() if v['for_calibration'] == 'f']
         self.columns = ("DATETIME", "MPVPosition", "CO2_dry", "CH4_dry")
         self.CO2_std_limit = 0.02
         self.CH4_std_limit = 0.0002
@@ -149,7 +151,7 @@ class Calculate:
                 "name": str(d[1]),
                 "CO2+": float(d[2]),
                 "CH4+": float(d[3]),
-                "for_calibration": int(d[4])}
+                "for_calibration": str(d[4])}
         return concentration_dict
 
     @staticmethod
@@ -343,8 +345,7 @@ class Calculate:
         except Exception as err:
             print(err)
 
-    @staticmethod
-    def take_last(data):
+    def take_last(self, data):
         """
         Takes only a half of the table from the end
         Args:
@@ -355,7 +356,10 @@ class Calculate:
         """
         new_data = {}
         for index, array in data.items():
-            df = array[-8:]
+            if str(array['MPVPosition']['mean'].to_list()[0]) in self.mpv_to_take_3:
+                df = array[-3:]  # flask
+            else:
+                df = array[-8:]  # balloon
             df.reset_index(inplace=True)
             new_data[index] = df
         return new_data
@@ -373,9 +377,14 @@ class Calculate:
         new_data = {}
         for index, array in data.items():
             tmp_array = array.iloc[:, 2:]
+            ch4_std = pd.Series(tmp_array['CH4_dry']['mean']).std()
+            co2_std = pd.Series(tmp_array['CO2_dry']['mean']).std()
             new_data[index] = tmp_array.mean()
             new_data[index]["datetime"] = array["DATETIME"]["mean"][0]
             new_data[index]["count_mean"] = len(tmp_array)
+            new_data[index]["CH4_dry"]['std'] = ch4_std
+            new_data[index]["CO2_dry"]['std'] = co2_std
+            # print("co2_std: ", co2_std)
         return new_data
 
     def calc_coefficients(self, data):
@@ -392,21 +401,24 @@ class Calculate:
         cycle_i = 0
         cycle = 0
         for line, date_time in zip(data_dict["data"], data_dict["index"]):
-            if cycle_i < len(self.concentration):
-                cycle_i += 1
-            else:
-                cycle_i = 1
-                cycle += 1
+            if self.no_flask:
+                if cycle_i < len(self.concentration):
+                    cycle_i += 1
+                else:
+                    cycle_i = 1
+                    cycle += 1
             measure_cycles.setdefault(cycle, {}).setdefault(
-                "data", {})[str(float(line[0]))] = [line[1], line[3]]  # mpv,CH4,CO2
-            measure_cycles.setdefault(cycle, {}).setdefault(
-                "std", {})[str(float(line[0]))] = [line[2], line[4]]  # mpv,CH4_std,CO2_std
-            measure_cycles.setdefault(cycle, {}).setdefault(
-                "count_mean", {})[str(float(line[0]))] = line[5]  # mpv,count_mean
-            measure_cycles.setdefault(cycle, {}).setdefault(
-                "date_time", {})[str(float(line[0]))] = date_time
+                "data", []).append({str(float(line[0])): [line[1], line[3]]})  # mpv,CH4,CO2
 
-        mpv_for_calibration = {k: v for k, v in self.concentration.items() if v["for_calibration"]}
+            measure_cycles.setdefault(cycle, {}).setdefault(
+                "std", []).append({str(float(line[0])): [line[2], line[4]]})  # mpv,CH4_std,CO2_std
+
+            measure_cycles.setdefault(cycle, {}).setdefault(
+                "count_mean", []).append({str(float(line[0])): line[5]})  # mpv,count_mean
+
+            measure_cycles.setdefault(cycle, {}).setdefault(
+                "date_time", []).append({str(float(line[0])): date_time})
+        mpv_for_calibration = {k: v for k, v in self.concentration.items() if v["for_calibration"] == '1'}
 
         calibrated_gases = []
         for i, cycle in measure_cycles.items():
@@ -415,19 +427,22 @@ class Calculate:
                 for mpv, values in mpv_for_calibration.items():
                     for j, gas in enumerate(["CH4+", "CO2+"]):
                         gases_dict.setdefault(gas, {}).setdefault(
-                            "measured", []).append(cycle["data"][mpv][j])
+                            "measured", []).extend([d[mpv][j] for d in cycle["data"] if mpv in d.keys()])
                         gases_dict.setdefault(gas, {}).setdefault(
-                            "std", []).append(cycle["std"][mpv][j])
+                            "std", []).extend([d[mpv][j] for d in cycle["std"] if mpv in d.keys()])
                         gases_dict.setdefault(gas, {}).setdefault(
                             "assigned", []).append(values[gas])
                         gases_dict.setdefault(gas, {}).setdefault(
-                            "date_time", []).append(cycle["date_time"][mpv])
+                            "date_time", []).extend([d[mpv] for d in cycle["date_time"] if mpv in d.keys()])
                         gases_dict.setdefault(gas, {}).setdefault(
                             "MPV", []).append(str(mpv))
                         gases_dict.setdefault(gas, {}).setdefault(
-                            "count_mean", []).append(cycle["count_mean"][mpv])
+                            "count_mean", []).extend([d[mpv] for d in cycle["count_mean"] if mpv in d.keys()])
                 # concentration CO2(measured CO2)
                 # concentration CH4(measured CH4)
+                print("Cycle: ", i)
+                print("CH4: ", gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"])
+                print("CO2: ", gases_dict["CO2+"]["measured"], gases_dict["CO2+"]["assigned"])
                 ch4_coeffs = np.polyfit(gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"], deg=1)
                 co2_coeffs = np.polyfit(gases_dict["CO2+"]["measured"], gases_dict["CO2+"]["assigned"], deg=1)
                 gases_dict["CH4+"]["coefficients"] = list(ch4_coeffs)
@@ -445,29 +460,30 @@ class Calculate:
                   "(Проверьте соответствие данных с файлом концентраций.)")
             exit(1)
 
-        mpv_not_for_calibration = {k: v for k, v in self.concentration.items() if not v["for_calibration"]}
+        mpv_not_for_calibration = {k: v for k, v in self.concentration.items() if v["for_calibration"] != '1'}
 
         gases = []
         for i, cycle in measure_cycles.items():
             gases_dict = {}
             for mpv, values in mpv_not_for_calibration.items():
+                print("MPV: ", mpv)
                 balloon_name = values["name"]
                 for j, gas in enumerate(["CH4+", "CO2+"]):
-                    measured_gas_value = cycle["data"].get(mpv, [0, 0])[j]
+                    measured_gas_value = [d[mpv][j] for d in cycle["data"] if mpv in d.keys()]
                     gases_dict.setdefault(balloon_name, {}).setdefault(
                         gas, {})["measured"] = measured_gas_value
                     gases_dict.setdefault(balloon_name, {}).setdefault(
-                        gas, {})["std"] = cycle["std"].get(mpv, [0, 0])[j]
+                        gas, {})["std"] = [d[mpv][j] for d in cycle["std"] if mpv in d.keys()]
                     coefficients = calibrated_gases[i][gas]['coefficients']
-                    calculated_value = coefficients[0] * measured_gas_value + coefficients[1]
+                    calculated_value = [coefficients[0] * mgv + coefficients[1] for mgv in measured_gas_value]
                     gases_dict.setdefault(balloon_name, {}).setdefault(
                         gas, {})["calculated"] = calculated_value
                     gases_dict.setdefault(balloon_name, {}).setdefault(
-                        gas, {})["date_time"] = cycle["date_time"].get(mpv)
+                        gas, {})["date_time"] = [d[mpv] for d in cycle["date_time"] if mpv in d.keys()]
                     gases_dict.setdefault(balloon_name, {}).setdefault(
-                        gas, {})["MPV"] = str(mpv)
+                        gas, {})["MPV"] = mpv
                     gases_dict.setdefault(balloon_name, {}).setdefault(
-                        gas, {})["count_mean"] = cycle["count_mean"].get(mpv)
+                        gas, {})["count_mean"] = [d[mpv] for d in cycle["count_mean"] if mpv in d.keys()]
             gases.append(gases_dict)
 
         return calibrated_gases, gases
@@ -511,10 +527,19 @@ class Calculate:
             for n, gas_pair in cycle.items():
                 for name, gas in gas_pair.items():
                     gas["name"] = n
-                    if name == 'CH4+':
-                        ch4_list.append(gas)
-                    if name == 'CO2+':
-                        co2_list.append(gas)
+                    for i, _ in enumerate(gas['calculated']):
+                        item = {
+                            'MPV': gas['MPV'],
+                            'calculated': gas['calculated'][i],
+                            'count_mean': gas['count_mean'][i],
+                            'date_time': gas['date_time'][i],
+                            'measured': gas['measured'][i],
+                            'std': gas['std'][i],
+                        }
+                        if name == 'CH4+':
+                            ch4_list.append(item)
+                        if name == 'CO2+':
+                            co2_list.append(item)
         return co2_list, ch4_list
 
     @staticmethod
@@ -529,10 +554,10 @@ class Calculate:
 
 
 class MainApp(tk.Tk):
-    def __init__(self, std=True):
+    def __init__(self, std=True, no_flask=True):
         tk.Tk.__init__(self)
 
-        main = Calculate(std)
+        main = Calculate(std, no_flask)
         # TODO: Allow working with 3 calibration gases
         df = main.get_data()
         data_dict = main.group_by_mpv_position(df)
@@ -558,10 +583,8 @@ class MainApp(tk.Tk):
                                CO2_dry_std=df.CO2_dry["std"].values,
                                Count_Mean=df.count_mean.values),
                           index=df.datetime.values).sort_index()
-        # Chart(self).show(data, mode="data.index, data.MPVPosition")
 
         calibrated_data, gases = main.calc_coefficients(df)
-        # Chart(self).show(calibrated_data, mode="calibrated_data")
 
         recalculated_calibrated_gases = main.self_check(calibrated_data)
 
@@ -587,10 +610,8 @@ class MainApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        std = False
-    else:
-        std = True
-    app = MainApp(std=std)
+    std = False if 'no_std' in sys.argv else True
+    no_flask = True if 'balloon_only' in sys.argv else False
+    app = MainApp(std=std, no_flask=no_flask)
     app.mainloop()
     input("\nДля выхода нажмите Enter...")
