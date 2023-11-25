@@ -3,6 +3,7 @@ import sys
 import tkinter as tk
 import warnings
 from datetime import timedelta
+from pprint import pprint
 
 import matplotlib
 import numpy as np
@@ -21,7 +22,7 @@ pd.set_option("display.max_rows", None,
 
 data_folder = "data"
 balloon_concentration_file = os.path.join(data_folder, "balloon_concentration.xlsx")
-one_minute_resample_filename = os.path.join(data_folder, "_table_by_1_minute.xlsx")
+one_minute_resample_filename = os.path.join(data_folder, "_table_by_1_minute_no_std.xlsx")
 ch4_table_filename = os.path.join(data_folder, "_table_ch4.xlsx")
 co2_table_filename = os.path.join(data_folder, "_table_co2.xlsx")
 
@@ -130,7 +131,6 @@ class Calculate:
         self.filter_by_std = std
         self.no_flask = no_flask
         self.concentration = self.open_concentration_xlsx()
-        self.mpv_to_take_3 = [k for k, v in self.concentration.items() if v['for_calibration'] == 'f']
         self.columns = ("DATETIME", "MPVPosition", "CO2_dry", "CH4_dry")
         self.CO2_std_limit = 0.02
         self.CH4_std_limit = 0.0002
@@ -170,9 +170,11 @@ class Calculate:
     def open_all_data_files(self):
         dfs = []
         for file in os.listdir(data_folder):
+            full_path = os.path.join(data_folder, file)
             if ".xls" in file:
                 continue
-            dfs.append(self.open_data_file(os.path.join(data_folder, file)))
+            if os.path.isfile(full_path):
+                dfs.append(self.open_data_file(full_path))
         return pd.concat(dfs)
 
     def get_data(self):
@@ -221,6 +223,7 @@ class Calculate:
         else:
             mpv_line_index = 0
             tmp_data = data
+
         new_data = {}
         index = 0
         for data_index, line in zip(tmp_data.index, tmp_data.values):  # "DATETIME", "MPVPosition", "CO2_dry", "CH4_dry"
@@ -266,44 +269,74 @@ class Calculate:
 
         for index, tmp_data in data.items():
             df = pd.DataFrame(data=tmp_data, columns=columns)
-            df.set_index(self.columns[0])
+            df.set_index(columns[0])
             dataframe_dict[index] = df
 
         return dataframe_dict
 
-    def resample_by_1_minute(self, data):
+    @staticmethod
+    def resample_by_1_minute(data):
         """
-        Resamples data by minute
+        Resamples data by 1 minute
         Args:
             data (dict): Data with dict of pd.DataFrame
 
         Returns:
             dict: Data with dict of pd.DataFrame
         """
-        if self.filter_by_std:
-            print(f"Корректировка по стандартному отклонению - Включена.\n"
-                  f"CH4 STD: {self.CO2_std_limit}\n"
-                  f"CO2 STD: {self.CH4_std_limit}")
-        else:
-            print("Корректировка по стандартному отклонению - Отключена.")
         new_data = {}
         for index, array in data.items():
-            if array.size > 5:
+            if array.size:
                 df = array.resample(timedelta(minutes=1), on='DATETIME').agg(
                     {'MPVPosition': 'mean',
                      'CH4_dry': ['mean', 'std'],
                      'CO2_dry': ['mean', 'std'],
                      })
-                if self.filter_by_std:
-                    std_data = df[df.CH4_dry['std'] < self.CH4_std_limit][df.CO2_dry['std'] < self.CO2_std_limit]
-                    print(f"MPV: '{df['MPVPosition']['mean'][0]}' Всего строк: {len(df)} -> "
-                          f"Минимум корректных строк для CH4_dry и CO2_dry: {len(std_data)}")
-                    if std_data.size == 0:
-                        continue
-                    new_data[index] = std_data
-                else:
-                    print(f"MPV: '{df['MPVPosition']['mean'][0]}' Всего строк: {len(df)}")
-                    new_data[index] = df
+                print(f"MPV: '{df['MPVPosition']['mean'].iloc[0]}' Всего строк: {len(df)}")
+                new_data[index] = df
+        return new_data
+
+    def filter_data_by_std(self, data):
+        """
+        Applies a data filter by std.
+        Keeps at least 3 values with the lowest std value.
+        Args:
+            data (dict): Data with dict of pd.DataFrame
+
+        Returns:
+            dict: Data with dict of pd.DataFrame
+        """
+        if not self.filter_by_std:
+            print("Отключена корректировка по стандартному отклонению.")
+        else:
+            print(f"Включена корректировка по стандартному отклонению.\n"
+                  f"CH4 STD: {self.CH4_std_limit}\n"
+                  f"CO2 STD: {self.CO2_std_limit}")
+        new_data = {}
+        for index, df in data.items():
+            if self.filter_by_std:
+                std_data = df[
+                    df.CH4_dry['std'] < self.CH4_std_limit][
+                    df.CO2_dry['std'] < self.CO2_std_limit][
+                    pd.notna(df.CH4_dry['std'])][
+                    pd.notna(df.CO2_dry['std'])]
+                try:
+                    df['MPVPosition']['mean'].iloc[0]
+                except Exception as err:
+                    pprint(df['MPVPosition']['mean'])
+                    raise err
+                print(f"Цикл: {index}, MPV: '{df['MPVPosition']['mean'].iloc[0]}' Всего строк: {len(df)} -> "
+                      f"Минимум корректных строк для CH4_dry и CO2_dry: {len(std_data)}")
+                if std_data.size == 0:
+                    min_co2 = sorted(df.CO2_dry['std'][pd.notna(df.CO2_dry['std'])])[0]
+                    print(f"Минимальное значение CO2 std: {round(min_co2, 4)}")
+                    pprint(df)
+                    print("======")
+                    std_data = df[df.CO2_dry['std'] <= min_co2]
+                new_data[index] = std_data
+            else:
+                print(f"MPV: '{df['MPVPosition']['mean'].iloc[0]}' Всего строк: {len(df)}")
+                new_data[index] = df
         return new_data
 
     def save_to_excel(self, data, filename):
@@ -334,8 +367,8 @@ class Calculate:
             multi_index1 = data.columns
             multi_index2 = data.columns[0]
             while len(multi_index1) != len(multi_index2):
-                input(f"Вы можете изменить промежуточный файл '{filename}'\n"
-                      f"Сохраните его и нажмите Enter, чтобы продолжить...")
+                # input(f"Вы можете изменить промежуточный файл '{filename}'\n"
+                #       f"Сохраните его и нажмите Enter, чтобы продолжить...")
                 data = pd.read_excel(filename, header=[0, 1], index_col=0)
                 multi_index2 = data.columns
                 if len(multi_index1) != len(multi_index2):
@@ -356,7 +389,8 @@ class Calculate:
         """
         new_data = {}
         for index, array in data.items():
-            if str(array['MPVPosition']['mean'].to_list()[0]) in self.mpv_to_take_3:
+            mpv_to_take_3 = [k for k, v in self.concentration.items() if v['for_calibration'] == 'f']
+            if str(array['MPVPosition']['mean'].to_list()[0]) in mpv_to_take_3:
                 df = array[-3:]  # flask
             else:
                 df = array[-8:]  # balloon
@@ -384,7 +418,6 @@ class Calculate:
             new_data[index]["count_mean"] = len(tmp_array)
             new_data[index]["CH4_dry"]['std'] = ch4_std
             new_data[index]["CO2_dry"]['std'] = co2_std
-            # print("co2_std: ", co2_std)
         return new_data
 
     def calc_coefficients(self, data):
@@ -400,6 +433,7 @@ class Calculate:
         measure_cycles = {}
         cycle_i = 0
         cycle = 0
+        cycle_str = "0"
         for line, date_time in zip(data_dict["data"], data_dict["index"]):
             if self.no_flask:
                 if cycle_i < len(self.concentration):
@@ -407,16 +441,17 @@ class Calculate:
                 else:
                     cycle_i = 1
                     cycle += 1
-            measure_cycles.setdefault(cycle, {}).setdefault(
+                    cycle_str = str(cycle)
+            measure_cycles.setdefault(cycle_str, {}).setdefault(
                 "data", []).append({str(float(line[0])): [line[1], line[3]]})  # mpv,CH4,CO2
 
-            measure_cycles.setdefault(cycle, {}).setdefault(
+            measure_cycles.setdefault(cycle_str, {}).setdefault(
                 "std", []).append({str(float(line[0])): [line[2], line[4]]})  # mpv,CH4_std,CO2_std
 
-            measure_cycles.setdefault(cycle, {}).setdefault(
+            measure_cycles.setdefault(cycle_str, {}).setdefault(
                 "count_mean", []).append({str(float(line[0])): line[5]})  # mpv,count_mean
 
-            measure_cycles.setdefault(cycle, {}).setdefault(
+            measure_cycles.setdefault(cycle_str, {}).setdefault(
                 "date_time", []).append({str(float(line[0])): date_time})
         mpv_for_calibration = {k: v for k, v in self.concentration.items() if v["for_calibration"] == '1'}
 
@@ -439,12 +474,9 @@ class Calculate:
                         gases_dict.setdefault(gas, {}).setdefault(
                             "count_mean", []).extend([d[mpv] for d in cycle["count_mean"] if mpv in d.keys()])
                 # concentration CO2(measured CO2)
-                # concentration CH4(measured CH4)
-                print("Cycle: ", i)
-                print("CH4: ", gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"])
-                print("CO2: ", gases_dict["CO2+"]["measured"], gases_dict["CO2+"]["assigned"])
-                ch4_coeffs = np.polyfit(gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"], deg=1)
                 co2_coeffs = np.polyfit(gases_dict["CO2+"]["measured"], gases_dict["CO2+"]["assigned"], deg=1)
+                # concentration CH4(measured CH4)
+                ch4_coeffs = np.polyfit(gases_dict["CH4+"]["measured"], gases_dict["CH4+"]["assigned"], deg=1)
                 gases_dict["CH4+"]["coefficients"] = list(ch4_coeffs)
                 gases_dict["CO2+"]["coefficients"] = list(co2_coeffs)
                 calibrated_gases.append(gases_dict)
@@ -454,6 +486,7 @@ class Calculate:
                     calibrated_gases.append(calibrated_gases[0])
                     print(f"Будут использованы коэффициенты из предыдущего цикла!\n")
             except Exception as err:
+                pprint(gases_dict)
                 raise err
         if not calibrated_gases:
             print("Измерений с калибровочными газами не найдено!\n"
@@ -466,7 +499,6 @@ class Calculate:
         for i, cycle in measure_cycles.items():
             gases_dict = {}
             for mpv, values in mpv_not_for_calibration.items():
-                print("MPV: ", mpv)
                 balloon_name = values["name"]
                 for j, gas in enumerate(["CH4+", "CO2+"]):
                     measured_gas_value = [d[mpv][j] for d in cycle["data"] if mpv in d.keys()]
@@ -474,7 +506,7 @@ class Calculate:
                         gas, {})["measured"] = measured_gas_value
                     gases_dict.setdefault(balloon_name, {}).setdefault(
                         gas, {})["std"] = [d[mpv][j] for d in cycle["std"] if mpv in d.keys()]
-                    coefficients = calibrated_gases[i][gas]['coefficients']
+                    coefficients = calibrated_gases[int(i)][gas]["coefficients"]
                     calculated_value = [coefficients[0] * mgv + coefficients[1] for mgv in measured_gas_value]
                     gases_dict.setdefault(balloon_name, {}).setdefault(
                         gas, {})["calculated"] = calculated_value
@@ -550,6 +582,7 @@ class Calculate:
                             axis=1)
         data = data.sort_values(by="date_time")
         data = data.reset_index(drop=True)
+        data = data[pd.notna(data['date_time'])]
         return data
 
 
@@ -566,13 +599,12 @@ class MainApp(tk.Tk):
 
         main.save_to_excel(data_dict, filename=one_minute_resample_filename)
         Chart(self).show(data_dict, mode="data2.index, data2.MPVPosition.mean", line_width=1, marker=None)
-
-        df = main.read_from_excel()
+        df = main.read_from_excel(filename=one_minute_resample_filename)
 
         data_dict = main.group_by_mpv_position(df)
         data_dict = main.make_dataframe_dict(data_dict, part=2)
+        data_dict = main.filter_data_by_std(data_dict)
         data_dict = main.take_last(data_dict)
-        # Chart(self).show(data, mode="data2.index, data2.MPVPosition.mean")
         data_dict = main.make_mean(data_dict)
         df = pd.concat(data_dict.values())
 
@@ -583,7 +615,6 @@ class MainApp(tk.Tk):
                                CO2_dry_std=df.CO2_dry["std"].values,
                                Count_Mean=df.count_mean.values),
                           index=df.datetime.values).sort_index()
-
         calibrated_data, gases = main.calc_coefficients(df)
 
         recalculated_calibrated_gases = main.self_check(calibrated_data)

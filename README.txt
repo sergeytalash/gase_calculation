@@ -1,9 +1,13 @@
 Описание файлов и папок программы Gase Calculator
 
-run_on_windows.bat - Запуск программы
+Запуск программы
+run_ballon_only.bat
+run_flask.bat
+run_no_std_ballon_only.bat
+run_no_std_flask.bat
 
 data - Папка, в которой находятся файлы измерений, файл концентраций и результаты вычислений
-data/balloon_concentration.xlsx - Информация по концентрации газов (Поле Name должно быть заполнено, 1 - тестовый газ, f - фляга)
+data/balloon_concentration.xlsx - Информация по концентрации газов
 data/table_by_1_minute.xlsx - Промежуточные ежеминутные измерения (перезаписываются при запуске программы)
 data/table_ch4.xlsx - Вывод значений CH4 (перезаписываются при запуске программы)
 data/table_co2.xlsx - Вывод значений CO2 (перезаписываются при запуске программы)
