@@ -20,7 +20,7 @@ pd.set_option("display.max_rows", None,
               "display.max_columns", None,
               "display.width", 140)
 
-data_folder = "data"
+data_folder = os.path.join("balloon", "data")
 balloon_concentration_file = os.path.join(data_folder, "balloon_concentration.xlsx")
 one_minute_resample_filename = os.path.join(data_folder, "_table_by_1_minute_no_std.xlsx")
 ch4_table_filename = os.path.join(data_folder, "_table_ch4.xlsx")
