@@ -157,8 +157,7 @@ class Calculate:
                     "for_calibration": str(d[4])}
         return concentration_dict
 
-    @staticmethod
-    def open_data_file(file_name):
+    def open_data_file(self, file_name):
         """
         Reads data file
         Args:
@@ -167,8 +166,16 @@ class Calculate:
         Returns:
             pd.DataFrame: Data table
         """
-        file = pd.read_csv(file_name, sep="\s+")
-        return pd.DataFrame(file)
+        data = pd.read_csv(file_name, sep="\s+")
+        data["DATETIME"] = pd.to_datetime(data['DATE'] + ' ' + data['TIME'])
+        new_columns = {}
+        for old_column in self.columns:
+            for new_column in data.columns:
+                if old_column in new_column:
+                    new_columns[new_column] = old_column
+        data.rename(columns=new_columns, inplace=True)
+        data = data.loc[:, self.columns]
+        return data
 
     def open_all_data_files(self):
         all_files = []
@@ -181,11 +188,14 @@ class Calculate:
                     all_files.append(full_path)
         all_files_len = len(all_files)
         dfs = []
-        for i, file in enumerate(all_files):
+        for i, file in enumerate(all_files, 1):
             dfs.append(self.open_data_file(file))
-            if i % 1000 == 0 or i + 1 == all_files_len:
-                print(f"Loading files [{i} / {all_files_len}]")
-        return pd.concat(dfs)
+            print(f"\rLoading files [ {round(i / all_files_len * 100, 2)}% ]")
+        data = pd.concat(dfs)
+        data.set_index("DATETIME")
+        data.sort_values(by="DATETIME", inplace=True)
+        data.reset_index(drop=True, inplace=True)
+        return data
 
     def get_data(self):
         """
@@ -197,24 +207,19 @@ class Calculate:
         cache_file = "data.cache"
         t = dt.now()
         if not os.path.exists(cache_file):
+            print("Чтение исходных файлов...")
             data = self.open_all_data_files()
+            print("Запись в кэш...")
             with open(cache_file, "w") as fw:
                 data.to_csv(fw)
         else:
+            print("Чтение из файла кэша...")
             with open(cache_file, "r") as fr:
                 data = pd.read_csv(fr)
+                data.set_index("DATETIME")
+                data.sort_values(by="DATETIME", inplace=True)
+                data.reset_index(drop=True, inplace=True)
         print(dt.now() - t)
-
-
-        data["DATETIME"] = pd.to_datetime(data['DATE'] + ' ' + data['TIME'])
-        data.set_index("DATETIME")
-        data = data.sort_values(by="DATETIME")
-        new_columns = {}
-        for old_column in self.columns:
-            for new_column in data.columns:
-                if old_column in new_column:
-                    new_columns[new_column] = old_column
-        data = data.rename(columns=new_columns)
         return data
 
     @staticmethod
@@ -237,31 +242,32 @@ class Calculate:
         Returns:
             dict: {i: {"DATETIME": [], "MPVPosition": [], "CO2_dry": [], "CH4_dry": []},.. }
         """
+        print("Группировка по MPV...")
+        t = dt.now()
         first_mpv = data["MPVPosition"].head(n=1).values[0]
         if "DATETIME" in data.columns:
-            mpv_line_index = 1
-            tmp_data = data.loc[:, self.columns]
+            mpv_line_index = 2
         else:
-            mpv_line_index = 0
-            tmp_data = data
+            mpv_line_index = 1
 
         new_data = {}
         index = 0
-        for data_index, line in zip(tmp_data.index, tmp_data.values):  # "DATETIME", "MPVPosition", "CO2_dry", "CH4_dry"
+        for data_index, line in zip(data.index, data.values):  # "DATETIME", "MPVPosition", "CO2_dry", "CH4_dry"
             mpv = float(line[mpv_line_index])
             line[mpv_line_index] = mpv
             line = line.tolist()
 
-            if mpv_line_index == 0:
+            if mpv_line_index == 1:
                 line.insert(0, data_index)
             # (*)
 
             if mpv not in [float(k) for k in self.concentration.keys()]:
                 continue
-            if line[1] != first_mpv:
+            if line[2] != first_mpv:
                 index += 1
-                first_mpv = line[1]
+                first_mpv = line[2]
             new_data.setdefault(index, []).append(line)
+        print(dt.now() - t)
         return new_data
 
     def make_dataframe_dict(self, data, part=1):
@@ -274,6 +280,8 @@ class Calculate:
         Returns:
             dict: {i: pd.DataFrame,.. }
         """
+        print("Dataframe -> Dict...")
+        t = dt.now()
         dataframe_dict = {}
         if part == 1:
             columns = self.columns
@@ -290,10 +298,9 @@ class Calculate:
             columns = []
 
         for index, tmp_data in data.items():
-            df = pd.DataFrame(data=tmp_data, columns=columns)
-            df.set_index(columns[0])
+            df = pd.DataFrame(data=[i[1:] for i in tmp_data], columns=columns)
             dataframe_dict[index] = df
-
+        print(dt.now() - t)
         return dataframe_dict
 
     @staticmethod
@@ -309,6 +316,7 @@ class Calculate:
         new_data = {}
         for index, array in data.items():
             if array.size:
+                array['DATETIME'] = pd.to_datetime(array['DATETIME'])
                 df = array.resample(timedelta(minutes=1), on='DATETIME').agg(
                     {'MPVPosition': 'mean',
                      'CH4_dry': ['mean', 'std'],
@@ -608,15 +616,13 @@ class Calculate:
         return data
 
 
-# class MainApp(tk.Tk):
-class MainApp:
+class MainApp(tk.Tk):
+# class MainApp:
     def __init__(self, std=True, no_flask=True):
-        # tk.Tk.__init__(self)
+        tk.Tk.__init__(self)
 
         main = Calculate(std, no_flask)
         df = main.get_data()
-        print(df)
-        exit(0)
         data_dict = main.group_by_mpv_position(df)
         data_dict = main.make_dataframe_dict(data_dict, part=1)
         data_dict = main.resample_by_1_minute(data_dict)
@@ -668,5 +674,5 @@ if __name__ == "__main__":
     std = False if 'no_std' in sys.argv else True
     no_flask = True if 'balloon_only' in sys.argv else False
     app = MainApp(std=std, no_flask=no_flask)
-    # app.mainloop()
+    app.mainloop()
     input("\nДля выхода нажмите Enter...")
